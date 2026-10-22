@@ -4,6 +4,7 @@ import {
   NOT_RESOLVED, omapTag, pairsTag, parseEvents, timestampTag, YAMLException,
   type Event, type Schema,
 } from "js-yaml";
+import { normalizeLegacyFlowIndent } from "./yaml-flow-indent";
 
 export const MIHOMO_YAML_INTEGER_TAG = defineScalarTag("tag:yaml.org,2002:int", {
   ...intCoreTag,
@@ -76,7 +77,16 @@ function validateMappingKeys(content: string, events: Event[]): void {
 }
 
 export function loadMihomoYaml(content: string, schema: Schema = MIHOMO_YAML_SCHEMA): unknown {
-  const events = parseEvents(content, {});
+  let events: Event[];
+  try {
+    events = parseEvents(content, {});
+  } catch (error) {
+    if (!(error instanceof YAMLException) || error.reason !== "deficient indentation") throw error;
+    const normalized = normalizeLegacyFlowIndent(content);
+    if (normalized === content) throw error;
+    content = normalized;
+    events = parseEvents(content, {});
+  }
   validateMappingKeys(content, events);
   const documents = constructFromEvents(events, { source: content, schema });
   if (documents.length > 1) throw new YAMLException("expected a single document in the stream, but found more");

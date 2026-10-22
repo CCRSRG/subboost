@@ -85,4 +85,116 @@ describe("Mihomo YAML schema", () => {
     expect(loadMihomoYaml("\n\n")).toBeNull();
     expect(loadMihomoYaml("\n ")).toBeNull();
   });
+
+  it.each<[string, unknown]>([
+    ["dns:\n  nameserver: [local.subboost.test\n, 127.0.0.1\n]\n", { dns: { nameserver: ["local.subboost.test", "127.0.0.1"] } }],
+    ["dns:\n  nameserver: [\n    local.subboost.test,\n    127.0.0.1\n  ]\n", { dns: { nameserver: ["local.subboost.test", "127.0.0.1"] } }],
+    ["sniffer:\n  sniff:\n    TLS: {ports: [443, 8443],\noverride-destination: true}\n", { sniffer: { sniff: { TLS: { ports: [443, 8443], "override-destination": true } } } }],
+  ])("preserves previously accepted multiline flow indentation: %j", (source, expected) => {
+    expect(loadMihomoYaml(source)).toEqual(expected);
+  });
+
+  const flowRepair = "dns:\n  nameserver: [one,\ntwo\n]\n";
+
+  it("keeps quoted and plain scalar punctuation intact during flow repair", () => {
+    expect(loadMihomoYaml([
+      'double: "a \\"quote\\" [#], b"',
+      "single: 'don''t [change], # text'",
+      'plain: https://local.subboost.test/a[b#c',
+      'quoted-key: {"list": [one, # ] } must remain a comment',
+      'two]}',
+      flowRepair,
+    ].join("\n"))).toEqual({
+      double: 'a "quote" [#], b', single: "don't [change], # text",
+      plain: "https://local.subboost.test/a[b#c", "quoted-key": { list: ["one", "two"] },
+      dns: { nameserver: ["one", "two"] },
+    });
+  });
+
+  it("preserves literal and folded block scalar contents during flow repair", () => {
+    expect(loadMihomoYaml([
+      "literal: |", "  [one", "  , two]", "", "folded: >-", "  {one", "  , two}",
+      "explicit: |2-", "  [three", "  , four]", flowRepair,
+    ].join("\n"))).toEqual({
+      literal: "[one\n, two]\n", folded: "{one , two}", explicit: "[three\n, four]",
+      dns: { nameserver: ["one", "two"] },
+    });
+  });
+
+  it("keeps brackets in multiline plain scalar continuations as scalar text", () => {
+    expect(loadMihomoYaml(`${flowRepair}label: first\n  [literal,\n  ]\nother: value\n`))
+      .toEqual({ dns: { nameserver: ["one", "two"] }, label: "first [literal, ]", other: "value" });
+  });
+
+  it("distinguishes block scalar content from a sequence mapping's sibling flow", () => {
+    expect(loadMihomoYaml("- data: |\n    text\n  flow: [one,\ntwo]\n"))
+      .toEqual([{ data: "text\n", flow: ["one", "two"] }]);
+    expect(loadMihomoYaml(`- |\n  [literal,\n  ]\n- {values: [one,\ntwo]}\n`))
+      .toEqual(["[literal,\n]\n", { values: ["one", "two"] }]);
+    expect(loadMihomoYaml("- data: text\n  flow: [one,\ntwo]\n"))
+      .toEqual([{ data: "text", flow: ["one", "two"] }]);
+    expect(loadMihomoYaml("x:\n  - data: text\n    flow: [one,\ntwo]\n"))
+      .toEqual({ x: [{ data: "text", flow: ["one", "two"] }] });
+  });
+
+  it("handles adjacent anchors, explicit tags and carriage-return line endings", () => {
+    expect(loadMihomoYaml("dns:\r  values: &x[one,\rtwo]\ralias: *x\r"))
+      .toEqual({ dns: { values: ["one", "two"] }, alias: ["one", "two"] });
+    expect(loadMihomoYaml("values: !<tag:yaml.org,2002:seq> [one,\ntwo]\n"))
+      .toEqual({ values: ["one", "two"] });
+  });
+
+  it("preserves anchors, nested flow nodes and prototype-safe mappings during repair", () => {
+    const value = loadMihomoYaml([
+      "defaults: &defaults {port: 443,", "tls: true}",
+      "values:", "  - [one,", "[two, three]", "]",
+      "merged: {<<: *defaults, port: 8443}", "__proto__: {safe: true}", flowRepair,
+    ].join("\r\n"));
+    expect(value).toEqual({
+      defaults: { port: 443, tls: true }, values: [["one", ["two", "three"]]],
+      merged: { port: 8443, tls: true }, ["__proto__"]: { safe: true },
+      dns: { nameserver: ["one", "two"] },
+    });
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+  });
+
+  it.each([
+    "dns:\n  nameserver: [one\ntwo]\n",
+    "dns:\n  nameserver: [one,\n\t]\n",
+    "dns:\n  nameserver: [one,\ntwo}\n",
+    "dns:\n  nameserver: [one,\ntwo\n",
+    "root:\n  child:\n  misplaced\n",
+    `${flowRepair}root:\n  child:\n  misplaced\n`,
+    `${flowRepair}: value\n`,
+    `${flowRepair}---\nother: value\n`,
+    `${flowRepair}label: first\n  [literal,\n]\n`,
+    `${flowRepair}label: first\n  [literal,\n---\n]\n`,
+    "dns:\n  a: [one,\n---\n]\n",
+  ])("continues rejecting ambiguous or malformed input: %j", (source) => {
+    expect(() => loadMihomoYaml(source)).toThrow();
+  });
+
+  it("bounds whitespace expansion for excessively indented flow input", () => {
+    const source = `${" ".repeat(64)}values: [one\n${", two\n".repeat(120)}]\n`;
+    expect(() => loadMihomoYaml(source)).toThrow("deficient indentation");
+  });
+
+  it("rejects repeated invalid scalar headers with a long whitespace suffix", () => {
+    const source = `${flowRepair}key: ${"|: ".repeat(16384)}${" ".repeat(16384)}\n`;
+    expect(() => loadMihomoYaml(source)).toThrow();
+  });
+
+  it("handles long comments with Unicode separators without rescanning their suffix", () => {
+    const source = `${flowRepair}key: ${"| # ".repeat(16384)}\u2028X\n`;
+    expect(loadMihomoYaml(source)).toEqual({ dns: { nameserver: ["one", "two"] }, key: "" });
+  });
+
+  it("rejects repeated unterminated verbatim tags", () => {
+    expect(() => loadMihomoYaml(`${flowRepair}key: ${"!<a ".repeat(16384)}\n`)).toThrow();
+  });
+
+  it("keeps the parser depth limit after flow repair", () => {
+    expect(() => loadMihomoYaml(`${flowRepair}deep: ${"[".repeat(200)}one${"]".repeat(200)}\n`))
+      .toThrow("maxDepth");
+  });
 });

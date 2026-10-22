@@ -57,6 +57,14 @@ describe("protocol import through persistence and generation", () => {
     }
   });
 
+  it.each(["+.5", "-.5", "+.0", "-.0", "+.5e+2", "-.5E-1"])(
+    "preserves leading-dot string credentials through import, save and generation: %s", (password) => {
+      const result = generated(`proxies: [{name: demo, type: trojan, ${endpoint}, password: ${password}}]`);
+      expect(result.proxies).toHaveLength(1);
+      expect(result.proxies[0].password).toBe(password);
+    },
+  );
+
   it.each([
     ["# subscription\n", "type:"], ["---\n", "type:"],
     ["", "type :"], ["", '"type":'], ["# subscription\n---\n", "'type' :"],

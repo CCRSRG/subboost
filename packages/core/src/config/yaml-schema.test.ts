@@ -42,4 +42,47 @@ describe("Mihomo YAML schema", () => {
     expect(value).toEqual({ "one,two": "pair", ["__proto__"]: { safe: true } });
     expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
   });
+
+  it.each([":", ":\n", ": value", ":\n  bad", "before:\n: value", "before: 1\n: value", "nested:\n  : value", "- : value"])(
+    "rejects a block mapping with no key node: %j", (source) => {
+      expect(() => loadMihomoYaml(source)).toThrow("a key node is missed");
+    },
+  );
+
+  it.each(["?\n: value", "? # comment\n: value", "null: value", "~: value", "!!null : value", "&key : value", "{ : value }"])(
+    "preserves explicit and flow null keys: %j", (source) => {
+      expect(loadMihomoYaml(source)).toEqual({ null: "value" });
+    },
+  );
+
+  it.each(['"": value', "'': value", "!!str : value", '? ""\n: value'])(
+    "preserves empty string keys: %j", (source) => {
+      expect(loadMihomoYaml(source)).toEqual({ "": "value" });
+    },
+  );
+
+  it("does not mistake scalar contents or completed collections for missing keys", () => {
+    expect(loadMihomoYaml('before: {empty:}\n? # comment\n: value'))
+      .toEqual({ before: { empty: null }, null: "value" });
+    expect(loadMihomoYaml('before: ["?"]\n?\n: value'))
+      .toEqual({ before: ["?"], null: "value" });
+    expect(loadMihomoYaml('literal: |\n  : value\nquoted: ": value"'))
+      .toEqual({ literal: ": value\n", quoted: ": value" });
+  });
+
+  it.each(["+.0", "-.0", "+.5", "-.5", "+.5e+2", "-.5E-1"])(
+    "preserves signed leading-dot strings and keys: %s", (value) => {
+      expect(loadMihomoYaml(`value: ${value}\n${value}: key`))
+        .toEqual({ value, [value]: "key" });
+      expect(() => loadMihomoYaml(`value: !!float ${value}`)).toThrow();
+    },
+  );
+
+  it("keeps ordinary floats, infinities and legacy empty-stream distinctions", () => {
+    expect(loadMihomoYaml("a: .5\nb: +0.5\nc: -0.5\nd: -.inf"))
+      .toEqual({ a: 0.5, b: 0.5, c: -0.5, d: -Infinity });
+    expect(loadMihomoYaml("\r")).toBeUndefined();
+    expect(loadMihomoYaml("\n\n")).toBeNull();
+    expect(loadMihomoYaml("\n ")).toBeNull();
+  });
 });

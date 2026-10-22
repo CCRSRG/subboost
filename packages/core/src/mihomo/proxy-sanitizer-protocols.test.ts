@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { parseSubscription } from "../parser";
 import { generateClashYaml } from "../generator";
 import { sanitizeMihomoProxyNode } from "./proxy-sanitizer";

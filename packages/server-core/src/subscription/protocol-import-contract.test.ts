@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { parseClashYaml, parseSubscription } from "@subboost/core/parser";
 import { generateClashYaml } from "@subboost/core/generator";
 import { validateSubscriptionNodeList } from "./crud";
